@@ -1,0 +1,19 @@
+input files are paritioned into M split
+    M splits are processed in parallel by different machines, different disks
+
+there are M map tasks and R reduce tasks
+    master picks idle workers and assign tasks
+
+a worker assigned a specific map tasks reads the contents of the corresponding 
+input split
+    parses key, value pairs of the d ata and calls the Map function
+
+    intermediate results are buffered on memory and then written to the worker's
+    disk, partioned into R regions
+
+    these files/locations are forwarded back to the master 
+
+reduce worker is notfied from the master about these locations and uses RPC 
+to read data from local disk of the map workers. Then a reduce worker has 
+read through all its supposed to do for that task, it sorts the keys and calls 
+the reduce function
