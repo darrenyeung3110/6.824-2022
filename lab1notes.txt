@@ -17,3 +17,10 @@ reduce worker is notfied from the master about these locations and uses RPC
 to read data from local disk of the map workers. Then a reduce worker has 
 read through all its supposed to do for that task, it sorts the keys and calls 
 the reduce function
+
+
+Q. The lab doesn't specify the number of mapper tasks, then is this value up to us? Nope
+A. The pg-*.txt arguments to mrcoordinator.go are the input files; 
+each file corresponds to one "split", and is the input to one Map task. 
+The -race flags runs go with its race detector.
+
