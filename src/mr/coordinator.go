@@ -8,12 +8,14 @@ import (
 	"net/rpc"
 	"net/http"
 	"time"
+	"sync"
 )
 
 const taskTimeoutTime float64 = 10.0
 
 type Coordinator struct {
 	// Your definitions here.
+	mu sync.Mutex
 
 	inputFiles []string
 	nReduce int
@@ -46,6 +48,8 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 
 // handler for a task request from a worker thread
 func (c *Coordinator) TaskRequestHandler(args *RequestTaskArgs, reply *RequestTaskReply) error {
+	c.mu.Lock()
+    defer c.mu.Unlock()
 	if len(c.finishedMapTasks) < len(c.inputFiles) { // map tasks not completed
 		hasTimedOutMapTask := false
 		for k, v := range c.mapTaskToWorker {
@@ -123,6 +127,8 @@ func generateIntermediateFileNames(nMap, reduceTaskNumber int) []string {
 // handler for when worker sends an rpc notifying coordinator that it has  
 // finished its task
 func (c *Coordinator) TaskFinishedHandler(args *FinishedTaskArgs, reply *FinishedTaskReply) error {
+	c.mu.Lock()
+    defer c.mu.Unlock()
 	if args.IsMap {
 		if _, ok := c.mapTaskToWorker[args.TaskNumber]; ok {
 			delete(c.mapTaskToWorker, args.TaskNumber)
@@ -159,6 +165,8 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
+	c.mu.Lock()
+    defer c.mu.Unlock()
 	ret := false
 
 	// Your code here.
