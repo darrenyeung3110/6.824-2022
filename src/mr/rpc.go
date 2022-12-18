@@ -24,6 +24,27 @@ type ExampleReply struct {
 
 // Add your RPC definitions here.
 
+type RequestTaskArgs struct {
+	Pid int
+}
+
+type RequestTaskReply struct {
+	HasTask bool
+	IsMap bool
+	FileName string // might need to change this later
+	TaskNumber int
+	NReduce int
+	IntermediateFiles []string // this is empty for map tasks
+}
+
+type FinishedTaskArgs struct {
+	Pid int
+	IsMap bool // if false, then the worker is reduce
+	TaskNumber int
+}
+
+type FinishedTaskReply struct {
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
