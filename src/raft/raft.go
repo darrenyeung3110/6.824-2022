@@ -21,6 +21,7 @@ import (
 	//	"bytes"
 	"sync"
 	"sync/atomic"
+    "time" 
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
@@ -63,6 +64,13 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
+    currentTerm int // latest term the server has seen (initialized to 0 on 
+                       // on first boot and increase monotonically)
+    votedFor int // might need to make this signed because can be null 
+                    // if did not vote
+    shouldStartElection bool // set to true when election timer resets. 
+                             // set to false when received a valid heartbeat
+                             // or voted for someone 
 
 }
 
@@ -143,6 +151,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+    Term int 
+    CandidateId int 
 }
 
 //
@@ -151,6 +161,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+    Term int 
+    VoteGranted bool
 }
 
 //
@@ -158,6 +170,19 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+
+    // "If a step says “reply false”, this means you should reply immediately, 
+    // and not perform any of the subsequent steps."" - 
+    // https://thesquareplanet.com/blog/students-guide-to-raft/
+    reply.Term = rf.currentTerm
+    if args.Term < rf.currentTerm {
+        // "If a server receives a request with a stale term 
+        // number, it rejects the request""
+        reply.VoteGranted = false
+    } else {
+        reply.VoteGranted = true
+        rf.shouldStartElection = false
+    }
 }
 
 //
@@ -194,6 +219,93 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+// TODO implement this function which starts an election 
+func (rf *Raft) startElection() {
+    rf.currentTerm++
+    rf.votedFor = rf.me
+    rf.shouldStartElection = false
+
+    rpcArgs := make([]*RequestVoteArgs, 0, len(rf.peers))
+    rpcReplies := make([]*RequestVoteReply, 0, len(rf.peers))
+    for i := 0; i < len(rf.peers); i++ {
+        if i != rf.me {
+            args := &RequestVoteArgs {
+                Term: rf.currentTerm, 
+                CandidateId: rf.me,
+            }
+            reply := &RequestVoteReply {
+            }
+            rpcArgs[i] = args 
+            rpcReplies[i] = reply
+            go rf.sendRequestVote(rf.me, args, reply)
+        }
+    }
+    votes := 1 // voted for itself
+    for i := 0; i < len(rf.peers); i++ {
+        if i != rf.me {
+            if rpcReplies[i].VoteGranted {
+                votes++
+            }
+        }
+    }
+    if votes > len(rf.peers)/2 {
+        // recieved votes from majority of the Raft cluster, become leader
+    }
+}
+
+//
+// example AppendEntries RPC arguments structure.
+// field names must start with capital letters!
+//
+type AppendEntriesArgs struct {
+    Term int
+}
+
+//
+// example AppendEntries RPC reply structure.
+// field names must start with capital letters!
+//
+type AppendEntriesReply struct {
+    Term int
+    Success bool
+}
+
+//
+// AppendEntries RPC handler.
+//
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    reply.Term = rf.currentTerm
+    if args.Term < rf.currentTerm {
+        // If a server receives a request with a stale term number, 
+        // it rejects the request
+        reply.Success = false
+    } else {
+        reply.Success = true
+        rf.shouldStartElection = false
+    }
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+func (rf *Raft) leaderSendHeartbeatsPeriodically() {
+	for rf.killed() == false {
+        // send heartbeats every 1/10th of second. 
+        for i := 0; i < len(rf.peers); i++ {
+            if i != rf.me {
+                args := &AppendEntriesArgs{
+                    Term: rf.currentTerm, 
+                }
+                reply := &AppendEntriesReply{
+                }
+                go rf.sendAppendEntries(i, args, reply) // TODO error handling?
+            }
+        }
+        time.Sleep(100 * time.Millisecond)
+	}
+}
 
 //
 // the service using Raft (e.g. a k/v server) wants to start
@@ -241,6 +353,7 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
@@ -249,7 +362,13 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-
+        
+        // TODO choose randomized election time out
+        rf.shouldStartElection = true
+        // time.Sleep()
+        if rf.shouldStartElection {
+            rf.startElection()
+        }
 	}
 }
 
@@ -272,6 +391,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+    rf.currentTerm = 0
+    // TODO rf.votedFor = ? 
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
