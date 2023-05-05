@@ -19,7 +19,7 @@ package raft
 
 import (
 	//	"bytes"
-    "fmt"
+    // "fmt"
 	"sync"
 	"sync/atomic"
     "time" 
@@ -204,12 +204,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         // number, it rejects the request""
         reply.Term = rf.currentTerm
         reply.VoteGranted = false
-    } else if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
+    }
+    if args.Term > rf.currentTerm {
+        rf.currentTerm = args.Term
+        rf.votedFor = -1
+        rf.currentState = FOLLOWER
+    }
+    if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
         reply.Term = args.Term
         reply.VoteGranted = true
-        if args.Term > rf.currentTerm {
-            rf.currentTerm = args.Term
-        }
         rf.votedFor = args.CandidateId
         rf.resetElectionTimer()
     }
@@ -255,13 +258,20 @@ func (rf *Raft) sendRequestVoteAndProcessReplyRoutine(server int,
                                                       args *RequestVoteArgs,
                                                       reply *RequestVoteReply, 
                                                       voteCount *int,
-                                                      wg *sync.WaitGroup) bool {
+                                                      wg *sync.WaitGroup) {
     defer wg.Done()
-    ok := rf.sendRequestVote(server, args, reply)
-    if ok && reply.VoteGranted {
+    rf.sendRequestVote(server, args, reply)
+    if reply.Term > rf.currentTerm {
+        rf.currentTerm = reply.Term
+        rf.votedFor = -1
+        rf.currentState = FOLLOWER
+    }
+    if rf.currentState == CANDIDATE && reply.VoteGranted { 
         (*voteCount)++
     }
-    return ok
+    if (rf.currentState == CANDIDATE && *voteCount > len(rf.peers)/2) {
+        rf.becomeLeader()
+    }
 }
 
 func (rf *Raft) becomeLeader() {
@@ -275,8 +285,6 @@ func (rf *Raft) startElection() {
     rf.votedFor = rf.me
     rf.resetElectionTimer()
 
-    rpcArgs := make([]*RequestVoteArgs, len(rf.peers), len(rf.peers))
-    rpcReplies := make([]*RequestVoteReply, len(rf.peers), len(rf.peers))
     voteCount := 1 // voted for itself
     wg := new(sync.WaitGroup)
     for i := 0; i < len(rf.peers); i++ {
@@ -289,18 +297,10 @@ func (rf *Raft) startElection() {
         }
         reply := &RequestVoteReply {
         }
-        rpcArgs[i] = args 
-        rpcReplies[i] = reply
         wg.Add(1)
         go rf.sendRequestVoteAndProcessReplyRoutine(i, args, reply, &voteCount, wg)
     }
     wg.Wait()
-    fmt.Printf("Hello World %d\n", len(rf.peers))
-    fmt.Printf("Hello World %d\n", voteCount)
-
-    if voteCount > len(rf.peers)/2 {
-        rf.becomeLeader()
-    }
 }
 
 //
@@ -324,7 +324,6 @@ type AppendEntriesReply struct {
 // AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-    reply.Term = rf.currentTerm
     if args.Term < rf.currentTerm {
         // If a server receives a request with a stale term number, 
         // it rejects the request
@@ -344,6 +343,7 @@ func (rf *Raft) sendAppendEntries(server int,
                                   args *AppendEntriesArgs,
                                   reply *AppendEntriesReply, 
                                   wg *sync.WaitGroup) bool {
+    defer wg.Done()
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
@@ -352,8 +352,8 @@ func (rf *Raft) sendAppendEntries(server int,
 func (rf *Raft) leaderSendHeartbeatsRoutine() {
 	for rf.currentState == LEADER {
         // send heartbeats every 1/10th of second. 
-        rpcArgs := make([]*AppendEntriesArgs, len(rf.peers), len(rf.peers))
-        rpcReplies := make([]*AppendEntriesReply, len(rf.peers), len(rf.peers))
+        rpcArgs := make([]*AppendEntriesArgs, len(rf.peers))
+        rpcReplies := make([]*AppendEntriesReply, len(rf.peers))
         wg := new(sync.WaitGroup)
         for i := 0; i < len(rf.peers); i++ {
             if i == rf.me {
@@ -371,9 +371,14 @@ func (rf *Raft) leaderSendHeartbeatsRoutine() {
         }
         wg.Wait()
         // process the replies
-        for _, reply := range rpcReplies {
-            if !reply.Success {
+        for i := 0; i < len(rpcReplies); i++ {
+            if i == rf.me {
+                continue
+            }
+            if !rpcReplies[i].Success {
                 // failed, that means some server has higher term than it
+                rf.currentTerm = rpcReplies[i].Term
+                rf.votedFor = -1
                 rf.currentState = FOLLOWER
                 break
             }
