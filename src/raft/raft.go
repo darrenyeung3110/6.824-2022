@@ -86,7 +86,6 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
 	var term int
 	var isleader bool
 	// Your code here (2A).
@@ -198,18 +197,22 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     // "If a step says “reply false”, this means you should reply immediately, 
     // and not perform any of the subsequent steps."" - 
     // https://thesquareplanet.com/blog/students-guide-to-raft/
-    reply.Term = rf.currentTerm
+
+    // "If a server receives a request with a stale term 
+    // number, it rejects the request"
     if args.Term < rf.currentTerm {
-        // "If a server receives a request with a stale term 
-        // number, it rejects the request""
         reply.Term = rf.currentTerm
         reply.VoteGranted = false
     }
+
+    // if i am out of date, convert to follower right away
     if args.Term > rf.currentTerm {
         rf.currentTerm = args.Term
         rf.votedFor = -1
         rf.currentState = FOLLOWER
     }
+
+    // if did not vote for anyone this current term, I can vote
     if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
         reply.Term = args.Term
         reply.VoteGranted = true
@@ -252,6 +255,11 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+func (rf *Raft) becomeLeader() {
+    rf.currentState = LEADER
+    go rf.leaderSendHeartbeatsRoutine()
+}
+
 // we seperate this function into its own go routine so that the reply can be 
 // processed independently from other RequestVotes send to other peers
 func (rf *Raft) sendRequestVoteAndProcessReplyRoutine(server int, 
@@ -261,25 +269,22 @@ func (rf *Raft) sendRequestVoteAndProcessReplyRoutine(server int,
                                                       wg *sync.WaitGroup) {
     defer wg.Done()
     rf.sendRequestVote(server, args, reply)
+
+    // if I discover a higher term, convert to follower, cannot be candidate
     if reply.Term > rf.currentTerm {
         rf.currentTerm = reply.Term
         rf.votedFor = -1
         rf.currentState = FOLLOWER
     }
+    // if I am still a candidate and the vote was granted, then count++
     if rf.currentState == CANDIDATE && reply.VoteGranted { 
         (*voteCount)++
-    }
-    if (rf.currentState == CANDIDATE && *voteCount > len(rf.peers)/2) {
-        rf.becomeLeader()
+        if *voteCount > len(rf.peers)/2 {
+            rf.becomeLeader()
+        }
     }
 }
 
-func (rf *Raft) becomeLeader() {
-    rf.currentState = LEADER
-    go rf.leaderSendHeartbeatsRoutine()
-}
-
-// TODO implement this function which starts an election 
 func (rf *Raft) startElection() {
     rf.currentTerm++
     rf.votedFor = rf.me
@@ -325,8 +330,6 @@ type AppendEntriesReply struct {
 //
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
     if args.Term < rf.currentTerm {
-        // If a server receives a request with a stale term number, 
-        // it rejects the request
         reply.Term = rf.currentTerm
         reply.Success = false
     } else {
@@ -334,6 +337,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         reply.Success = true
         if args.Term > rf.currentTerm {
             rf.currentTerm = args.Term
+            rf.votedFor = -1
+            rf.currentState = FOLLOWER
         }
         rf.resetElectionTimer()
     }
@@ -380,10 +385,9 @@ func (rf *Raft) leaderSendHeartbeatsRoutine() {
                 rf.currentTerm = rpcReplies[i].Term
                 rf.votedFor = -1
                 rf.currentState = FOLLOWER
-                break
             }
         }
-        // if still valid leader, we sleep, else we immediately end this routine
+        // if still valid leader, we sleep, else we would immediately end this routine
         if rf.currentState == LEADER {
             time.Sleep(100 * time.Millisecond)
         }
@@ -440,7 +444,7 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for !rf.killed()  {
 
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
@@ -452,8 +456,7 @@ func (rf *Raft) ticker() {
         // to see whether the time since then is greater than the timeout period.
         // It's easiest to use time.Sleep() with a small constant argument to
         // drive the periodic checks."
-        if (rf.currentState == FOLLOWER || rf.currentState == CANDIDATE) && 
-                time.Now().After(rf.electionTimeout) {
+        if (rf.currentState == FOLLOWER || rf.currentState == CANDIDATE) && time.Now().After(rf.electionTimeout) {
             rf.currentState = CANDIDATE
             rf.startElection()
         }
