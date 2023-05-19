@@ -19,7 +19,7 @@ package raft
 
 import (
 	//	"bytes"
-    // "fmt"
+	// "fmt"
 	"sync"
 	"sync/atomic"
     "time" 
@@ -89,8 +89,12 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+    rf.mu.Lock()
+    DPrintf("%d GetState locked\n", rf.me)
     term = rf.currentTerm
-    isleader = rf.currentState == LEADER
+    isleader = (rf.currentState == LEADER)
+    rf.mu.Unlock()
+    DPrintf("%d GetState unlocked\n", rf.me)
 	return term, isleader
 }
 
@@ -200,9 +204,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
     // "If a server receives a request with a stale term 
     // number, it rejects the request"
+    rf.mu.Lock()
+    DPrintf("%d RequestVote Locked\n", rf.me)
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         reply.VoteGranted = false
+        rf.mu.Unlock()
+        return
     }
 
     // if i am out of date, convert to follower right away
@@ -210,6 +218,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.currentTerm = args.Term
         rf.votedFor = -1
         rf.currentState = FOLLOWER
+        DPrintf("%d converted to follower in RequestVote Handler\n", rf.me)
     }
 
     // if did not vote for anyone this current term, I can vote
@@ -219,6 +228,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.votedFor = args.CandidateId
         rf.resetElectionTimer()
     }
+    rf.mu.Unlock()
+    DPrintf("%d RequestVote unlocked\n", rf.me)
 }
 
 //
@@ -268,36 +279,54 @@ func (rf *Raft) sendRequestVoteAndProcessReplyRoutine(server int,
                                                       voteCount *int,
                                                       wg *sync.WaitGroup) {
     defer wg.Done()
-    rf.sendRequestVote(server, args, reply)
+    ok := rf.sendRequestVote(server, args, reply)
 
-    // if I discover a higher term, convert to follower, cannot be candidate
-    if reply.Term > rf.currentTerm {
-        rf.currentTerm = reply.Term
-        rf.votedFor = -1
-        rf.currentState = FOLLOWER
-    }
-    // if I am still a candidate and the vote was granted, then count++
-    if rf.currentState == CANDIDATE && reply.VoteGranted { 
-        (*voteCount)++
-        if *voteCount > len(rf.peers)/2 {
-            rf.becomeLeader()
+    rf.mu.Lock()
+    DPrintf("%d sendRequestVoteAndProcessReplyRoutine Locking\n", rf.me)
+    if ok {
+        // if I discover a higher term, convert to follower, cannot be candidate
+        if reply.Term > rf.currentTerm {
+            rf.currentTerm = reply.Term
+            rf.votedFor = -1
+            rf.currentState = FOLLOWER
+            DPrintf("%d converted to follower in sendRequestVoteAndProcessReplyRoutine\n", rf.me)
+        }
+        // if I am still a candidate and the vote was granted, then count++
+        if rf.currentState == CANDIDATE && reply.VoteGranted { 
+            (*voteCount)++
+            if *voteCount > len(rf.peers)/2 {
+                rf.becomeLeader()
+                DPrintf("%d became leader in sendRequestVoteAndProcessReplyRoutine\n", rf.me)
+            }
         }
     }
+    rf.mu.Unlock()
+    DPrintf("%d sendRequestVoteAndProcessReplyRoutine unlocked\n", rf.me)
 }
 
 func (rf *Raft) startElection() {
+    rf.mu.Lock()
+    DPrintf("%d locked in startElection\n", rf.me)
+    DPrintf("%d starting election\n", rf.me)
     rf.currentTerm++
     rf.votedFor = rf.me
     rf.resetElectionTimer()
+    rf.mu.Unlock()
+    DPrintf("%d unlocked in startElection\n", rf.me)
 
     voteCount := 1 // voted for itself
     wg := new(sync.WaitGroup)
+    rf.mu.Lock()
+    DPrintf("%d locked in startElection\n", rf.me)
+    savedCurrentTerm := rf.currentTerm
+    rf.mu.Unlock()
+    DPrintf("%d unlocked in startElection\n", rf.me)
     for i := 0; i < len(rf.peers); i++ {
         if i == rf.me {
             continue
         }
         args := &RequestVoteArgs {
-            Term: rf.currentTerm, 
+            Term: savedCurrentTerm,
             CandidateId: rf.me,
         }
         reply := &RequestVoteReply {
@@ -305,7 +334,6 @@ func (rf *Raft) startElection() {
         wg.Add(1)
         go rf.sendRequestVoteAndProcessReplyRoutine(i, args, reply, &voteCount, wg)
     }
-    wg.Wait()
 }
 
 //
@@ -329,6 +357,11 @@ type AppendEntriesReply struct {
 // AppendEntries RPC handler.
 //
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+    DPrintf("%d AppendEntires RPC Trying to Acquire Lock\n", rf.me)
+    rf.mu.Lock()
+    DPrintf("%d AppendEntires RPC locked\n", rf.me)
+    DPrintf("%d handling heartbeat RPCs\n", rf.me)
+    DPrintf("%d args term: %d, my term: %d\n", rf.me, args.Term, rf.currentTerm)
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         reply.Success = false
@@ -339,27 +372,47 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
             rf.currentTerm = args.Term
             rf.votedFor = -1
             rf.currentState = FOLLOWER
+            DPrintf("%d converted to follower in AppendEntries handler\n", rf.me)
         }
         rf.resetElectionTimer()
     }
+    rf.mu.Unlock()
+    DPrintf("%d AppendEntires RPC Unlocked\n", rf.me)
 }
 
-func (rf *Raft) sendAppendEntries(server int,
-                                  args *AppendEntriesArgs,
-                                  reply *AppendEntriesReply, 
-                                  wg *sync.WaitGroup) bool {
-    defer wg.Done()
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
+func (rf *Raft) sendAppendEntriesAndProcessReplyRoutine(server int,
+                                                        args *AppendEntriesArgs,
+                                                        reply *AppendEntriesReply) {
+    DPrintf("%d keep sending to %d\n", rf.me, server)
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply) 
+    DPrintf("%d sendAppendEntries Ok or not: %t\n", rf.me, ok)
+    DPrintf("%d finished sendsing heartbeat to %d\n", rf.me, server)
+    if !ok {
+        return
+    }
+    if !reply.Success {
+        rf.mu.Lock()
+        DPrintf("%d Locked in sendAppendEntriesAndProcessReplyRoutine %d\n", rf.me, server)
+        if reply.Term > rf.currentTerm {
+            rf.currentTerm = reply.Term
+        }
+        rf.votedFor = -1
+        rf.currentState = FOLLOWER
+        rf.mu.Unlock()
+        DPrintf("%d Unlocked in sendAppendEntriesAndProcessReplyRoutine %d\n", rf.me, server)
+    }
 }
 
-// go routine for leader use to send heartbeats
 func (rf *Raft) leaderSendHeartbeatsRoutine() {
-	for rf.currentState == LEADER {
+	for {
+        rf.mu.Lock()
+        DPrintf("%d locked in leaderSendHeartbeatsRoutine 1\n", rf.me)
+        if rf.currentState != LEADER {
+            rf.mu.Unlock()
+            DPrintf("%d unlocked in leaderSendHeartbeatsRoutine 1\n", rf.me)
+            break
+        }
         // send heartbeats every 1/10th of second. 
-        rpcArgs := make([]*AppendEntriesArgs, len(rf.peers))
-        rpcReplies := make([]*AppendEntriesReply, len(rf.peers))
-        wg := new(sync.WaitGroup)
         for i := 0; i < len(rf.peers); i++ {
             if i == rf.me {
                 continue;
@@ -369,28 +422,14 @@ func (rf *Raft) leaderSendHeartbeatsRoutine() {
             }
             reply := &AppendEntriesReply{
             }
-            rpcArgs[i] = args
-            rpcReplies[i] = reply
-            wg.Add(1)
-            go rf.sendAppendEntries(i, args, reply, wg)
+            go rf.sendAppendEntriesAndProcessReplyRoutine(i, args, reply)
         }
-        wg.Wait()
+        DPrintf("%d sending heartbeat RPCS\n", rf.me)
+        rf.mu.Unlock()
+        DPrintf("%d unlocked in leaderSendHeartbeatsRoutine 2\n", rf.me)
         // process the replies
-        for i := 0; i < len(rpcReplies); i++ {
-            if i == rf.me {
-                continue
-            }
-            if !rpcReplies[i].Success {
-                // failed, that means some server has higher term than it
-                rf.currentTerm = rpcReplies[i].Term
-                rf.votedFor = -1
-                rf.currentState = FOLLOWER
-            }
-        }
         // if still valid leader, we sleep, else we would immediately end this routine
-        if rf.currentState == LEADER {
-            time.Sleep(100 * time.Millisecond)
-        }
+        time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -456,9 +495,17 @@ func (rf *Raft) ticker() {
         // to see whether the time since then is greater than the timeout period.
         // It's easiest to use time.Sleep() with a small constant argument to
         // drive the periodic checks."
+        rf.mu.Lock()
+        DPrintf("%d locked in ticker\n", rf.me)
         if (rf.currentState == FOLLOWER || rf.currentState == CANDIDATE) && time.Now().After(rf.electionTimeout) {
             rf.currentState = CANDIDATE
+            DPrintf("%d converted to candidate in ticker\n", rf.me)
+            rf.mu.Unlock()
+            DPrintf("%d unlocked in ticker\n", rf.me)
             rf.startElection()
+        } else {
+            rf.mu.Unlock()
+            DPrintf("%d unlocked in ticker\n", rf.me)
         }
         time.Sleep(100 * time.Millisecond)
 	}
