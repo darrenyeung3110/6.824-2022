@@ -96,10 +96,10 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
     rf.mu.Lock()
+    defer rf.mu.Unlock()
     DPrintf("%d GetState locked\n", rf.me)
     term = rf.currentTerm
     isleader = (rf.currentState == LEADER)
-    rf.mu.Unlock()
     DPrintf("%d GetState unlocked\n", rf.me)
 	return term, isleader
 }
@@ -142,11 +142,9 @@ func (rf *Raft) startElection() {
     rf.currentTerm++
     rf.votedFor = rf.me
     rf.resetElectionTimer()
-    rf.mu.Unlock()
     DPrintf("%d unlocked in startElection\n", rf.me)
 
     voteCount := 1 // voted for itself
-    rf.mu.Lock()
     DPrintf("%d locked in startElection\n", rf.me)
     savedCurrentTerm := rf.currentTerm
     rf.mu.Unlock()
@@ -194,6 +192,7 @@ func (rf *Raft) sendRequestVoteAndProcessReplyRoutine(server int,
     ok := rf.sendRequestVote(server, args, reply)
 
     rf.mu.Lock()
+    defer rf.mu.Unlock()
     DPrintf("%d sendRequestVoteAndProcessReplyRoutine Locking\n", rf.me)
     if ok {
         // if I discover a higher term, convert to follower, cannot be candidate
@@ -212,7 +211,6 @@ func (rf *Raft) sendRequestVoteAndProcessReplyRoutine(server int,
             }
         }
     }
-    rf.mu.Unlock()
     DPrintf("%d sendRequestVoteAndProcessReplyRoutine unlocked\n", rf.me)
 }
 
@@ -263,11 +261,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     // "If a server receives a request with a stale term 
     // number, it rejects the request"
     rf.mu.Lock()
+    defer rf.mu.Unlock()
     DPrintf("%d RequestVote Locked\n", rf.me)
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         reply.VoteGranted = false
-        rf.mu.Unlock()
         return
     }
 
@@ -286,7 +284,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.votedFor = args.CandidateId
         rf.resetElectionTimer()
     }
-    rf.mu.Unlock()
     DPrintf("%d RequestVote unlocked\n", rf.me)
 }
 
@@ -376,6 +373,7 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
     DPrintf("%d AppendEntires RPC Trying to Acquire Lock\n", rf.me)
     rf.mu.Lock()
+    defer rf.mu.Unlock()
     DPrintf("%d AppendEntires RPC locked\n", rf.me)
     DPrintf("%d handling heartbeat RPCs\n", rf.me)
     DPrintf("%d args term: %d, my term: %d\n", rf.me, args.Term, rf.currentTerm)
@@ -393,7 +391,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         }
         rf.resetElectionTimer()
     }
-    rf.mu.Unlock()
     DPrintf("%d AppendEntires RPC Unlocked\n", rf.me)
 }
 
