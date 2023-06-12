@@ -131,7 +131,7 @@ func (rf *Raft) ticker() {
             rf.mu.Unlock()
             DPrintf("%d unlocked in ticker\n", rf.me)
         }
-        time.Sleep(100 * time.Millisecond)
+        time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -142,10 +142,8 @@ func (rf *Raft) startElection() {
     rf.currentTerm++
     rf.votedFor = rf.me
     rf.resetElectionTimer()
-    DPrintf("%d unlocked in startElection\n", rf.me)
 
     voteCount := 1 // voted for itself
-    DPrintf("%d locked in startElection\n", rf.me)
     savedCurrentTerm := rf.currentTerm
     rf.mu.Unlock()
     DPrintf("%d unlocked in startElection\n", rf.me)
@@ -262,7 +260,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     // number, it rejects the request"
     rf.mu.Lock()
     defer rf.mu.Unlock()
-    DPrintf("%d RequestVote Locked\n", rf.me)
+    DPrintf("%d RequestVote Handler Locked\n", rf.me)
+    DPrintf("args term: %d, my term: %d\n", args.Term, rf.currentTerm)
     if args.Term < rf.currentTerm {
         reply.Term = rf.currentTerm
         reply.VoteGranted = false
@@ -278,13 +277,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
     }
 
     // if did not vote for anyone this current term, I can vote
+    DPrintf("voted for: %d, candidateId: %d\n", rf.votedFor, args.CandidateId)
     if rf.votedFor == -1 || rf.votedFor == args.CandidateId {
         reply.Term = args.Term
         reply.VoteGranted = true
         rf.votedFor = args.CandidateId
         rf.resetElectionTimer()
     }
-    DPrintf("%d RequestVote unlocked\n", rf.me)
+    DPrintf("%d RequestVote Handler unlocked\n", rf.me)
 }
 
 //
@@ -335,7 +335,7 @@ func (rf *Raft) leaderSendHeartbeatsRoutine() {
         DPrintf("%d unlocked in leaderSendHeartbeatsRoutine 2\n", rf.me)
         // process the replies
         // if still valid leader, we sleep, else we would immediately end this routine
-        time.Sleep(100 * time.Millisecond)
+        time.Sleep(150 * time.Millisecond)
 	}
 }
 
@@ -354,9 +354,9 @@ func (rf *Raft) sendAppendEntriesAndProcessReplyRoutine(server int,
         DPrintf("%d Locked in sendAppendEntriesAndProcessReplyRoutine %d\n", rf.me, server)
         if reply.Term > rf.currentTerm {
             rf.currentTerm = reply.Term
+            rf.votedFor = -1
+            rf.currentState = FOLLOWER
         }
-        rf.votedFor = -1
-        rf.currentState = FOLLOWER
         rf.mu.Unlock()
         DPrintf("%d Unlocked in sendAppendEntriesAndProcessReplyRoutine %d\n", rf.me, server)
     }
@@ -402,8 +402,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // between two timers should big enough that it allows all RPCs to be sent 
 // and processes (rtm said around 10 milliseconds in lecture..)
 func (rf *Raft) resetElectionTimer() {
-    lowerBound := (5 * 100) // 500 milliseconds
-    upperBound := int(2.5 * 1000) // 2.5 seconds = 2500 milliseconds
+    lowerBound := 450 // 450 milliseconds
+    upperBound := 750 // 750 milliseconds
     randomTimeout := rand.Intn(upperBound - lowerBound) + lowerBound
     rf.electionTimeout = time.Now().Add(time.Duration(randomTimeout) * time.Millisecond)
 }
