@@ -195,7 +195,7 @@ func (rf *Raft) ticker() {
             rf.mu.Unlock()
             DPrintf("%d unlocked in ticker\n", rf.me)
         }
-        time.Sleep(50 * time.Millisecond)
+        time.Sleep(25 * time.Millisecond)
 	}
 }
 
@@ -451,7 +451,7 @@ func (rf *Raft) leaderSendHeartbeatsRoutine() {
         rf.mu.Unlock()
         DPrintf("%d unlocked in leaderSendHeartbeatsRoutine 2\n", rf.me)
         // if still valid leader, we sleep, else we would immediately end this routine
-        time.Sleep(150 * time.Millisecond)
+        time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -484,7 +484,7 @@ func (rf *Raft) sendAppendEntriesAndProcessReplyRoutine(server int,
             found := false
             for i := len(rf.log)-1; i >= 0; i-- {
                 if rf.log[i].Term == reply.ConflictTerm {
-                    rf.nextIndex[server] = i + 1 // ?
+                    rf.nextIndex[server] = i // ?
                     found = true
                     break
                 }
@@ -676,8 +676,8 @@ func (rf *Raft) applyNewCommitedEntries() {
 // between two timers should big enough that it allows all RPCs to be sent 
 // and processes (rtm said around 10 milliseconds in lecture..)
 func (rf *Raft) resetElectionTimer() {
-    lowerBound := 450 // 450 milliseconds
-    upperBound := 750 // 750 milliseconds
+    lowerBound := 300 // 450 milliseconds
+    upperBound := 500 // 750 milliseconds
     randomTimeout := rand.Intn(upperBound - lowerBound) + lowerBound
     rf.electionTimeout = time.Now().Add(time.Duration(randomTimeout) * time.Millisecond)
 }
