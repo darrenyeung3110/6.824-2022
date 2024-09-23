@@ -120,7 +120,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
     rf.matchIndex = make([]int, len(rf.peers))
 
 	// initialize from state persisted before a crash
+    DPrintf("Calling rf.readPersist: State: %s, Length: %d", string(persister.ReadRaftState()), len(persister.ReadRaftState()))
 	rf.readPersist(persister.ReadRaftState())
+    DPrintf("After calling rf.readPersist: %d, %d", rf.CurrentTerm, rf.VotedFor) 
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
@@ -170,6 +172,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
     }
     DPrintf("Leader %d appended new command\n", rf.me)
     rf.Log = append(rf.Log, *logEntry)
+    rf.persist()
     return len(rf.Log)-1, rf.CurrentTerm, true
 }
 
@@ -211,6 +214,7 @@ func (rf *Raft) startElection() {
     DPrintf("%d starting election\n", rf.me)
     rf.CurrentTerm++
     rf.VotedFor = rf.me
+    rf.persist()
     rf.resetElectionTimer()
     DPrintf("%d unlocked in startElection\n", rf.me)
 
@@ -274,6 +278,7 @@ func (rf *Raft) sendRequestVoteAndProcessReplyRoutine(server int,
             rf.CurrentTerm = reply.Term
             rf.VotedFor = -1
             rf.currentState = FOLLOWER
+            rf.persist()
             DPrintf("%d converted to follower in sendRequestVoteAndProcessReplyRoutine\n", rf.me)
         }
         // if I am still a candidate and the vote was granted, then count++
@@ -348,6 +353,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         rf.CurrentTerm = args.Term
         rf.VotedFor = -1
         rf.currentState = FOLLOWER
+        rf.persist()
         DPrintf("%d converted to follower in RequestVote Handler\n", rf.me)
     }
 
@@ -361,6 +367,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
         reply.Term = args.Term
         reply.VoteGranted = true
         rf.VotedFor = args.CandidateId
+        rf.persist()
         rf.resetElectionTimer()
     }
     DPrintf("%d RequestVote unlocked\n", rf.me)
@@ -489,6 +496,7 @@ func (rf *Raft) sendAppendEntriesAndProcessReplyRoutine(server int,
             rf.CurrentTerm = reply.Term
             rf.VotedFor = -1
             rf.currentState = FOLLOWER
+            rf.persist()
         } else {
             // failed because of log inconsitency, then decrement nextIndex and retry at next heartbeat
             // fmt.Printf("me: %d, server: %d, reply term: %d currentTerm: %d\n", rf.me, server, reply.Term, rf.currentTerm)
@@ -539,7 +547,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
     defer rf.mu.Unlock()
     DPrintf("%d AppendEntries RPC locked\n", rf.me)
     DPrintf("%d handling heartbeat RPCs\n", rf.me)
-    DPrintf("%d args term: %d, my term: %d\n", rf.me, args.Term, rf.CurrentTerm)
+    DPrintf("Me: %d, My current term: %d, AppendEntriesArgs: %+v\n", rf.me, rf.CurrentTerm, args)
+    // DPrintf("%d args term: %d, my term: %d\n", rf.me, args.Term, rf.CurrentTerm)
 
     reply.Term = rf.CurrentTerm
 
@@ -556,6 +565,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
         rf.CurrentTerm = args.Term
         rf.VotedFor = -1
         rf.currentState = FOLLOWER
+        rf.persist()
         DPrintf("%d converted to follower in AppendEntries handler\n", rf.me)
     }
 
@@ -610,8 +620,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
             rf.Log = append(rf.Log, args.Entries[i:]...)
             DPrintf("%d peer appending new entry, new length %d\n", rf.me, len(rf.Log))
             for _, log := range rf.Log {
-                DPrintf("%d log index: %d, log term: %d, lod command: %d\n", rf.me, log.Index, log.Term, log.Command)
+                DPrintf("%d log index: %d, log term: %d, log command: %d\n", rf.me, log.Index, log.Term, log.Command)
             }
+
+            rf.persist()
 
             break
         }
@@ -630,10 +642,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
     DPrintf("%d AppendEntries RPC Unlocked\n", rf.me)
 }
 
-// check if there is an N such that N > leader's commitIndex where a majority 
+// Check if there is an N such that N > leader's commitIndex where a majority 
 // of matchIndex[] is >= N and also rf.log[N].Term ==  rf.currentTerm. If so, 
-// then update commitIndex = N for the biggest possible N
-// if during the search, we find newly commited entries, we apply them
+// then update commitIndex = N for the biggest possible N.
 func (rf *Raft) leaderUpdateCommitIndex() {
     biggestPossibleN := rf.commitIndex
     for i := rf.commitIndex + 1; i < len(rf.Log); i++ {
@@ -647,7 +658,7 @@ func (rf *Raft) leaderUpdateCommitIndex() {
                 numFollowersCommitted++
             }
         }
-        // newly commited index, so send ApplyMsg
+
         if numFollowersCommitted > len(rf.peers)/2 {
             biggestPossibleN = i
         }
@@ -769,6 +780,7 @@ func (rf *Raft) persist() {
 //
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
+        DPrintf("read persist returned early")
 		return
 	}
 	// Your code here (2C).
@@ -793,6 +805,7 @@ func (rf *Raft) readPersist(data []byte) {
         log.Fatal("Gob decoding went wrong within readPersist")
     }
 
+    DPrintf("rf.Current term in readPersist: %d, rf.VotedFor in readPersist: %d", rf.CurrentTerm, rf.VotedFor)
     rf.CurrentTerm = currentTerm
     rf.VotedFor = votedFor
     rf.Log = l
