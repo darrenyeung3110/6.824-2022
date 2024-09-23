@@ -658,8 +658,8 @@ func (rf *Raft) leaderUpdateCommitIndex() {
                 numFollowersCommitted++
             }
         }
-
-        if numFollowersCommitted > len(rf.peers)/2 {
+        // newly commited index, so send ApplyMsg
+        if numFollowersCommitted > len(rf.peers)/2 && rf.Log[i].Term == rf.CurrentTerm {
             biggestPossibleN = i
         }
     }
